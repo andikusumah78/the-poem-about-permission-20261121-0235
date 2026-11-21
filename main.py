@@ -9,6 +9,8 @@ same bytes on every run.
 Run:  MAKEFUN_OUTPUT_DIR=out python3 main.py   (default output: /output)
 """
 import os
+import sys
+import tempfile
 
 POEM = (
     "I asked the door to open.\n"
@@ -25,13 +27,46 @@ POEM = (
 )
 
 
+def validate_output(text):
+    """Self-check the poem before writing it.
+
+    Rules: 1-280 Unicode code points, valid UTF-8, not
+    whitespace-only. Raises ValueError with a clear message
+    when a rule is violated.
+    """
+    if not 1 <= len(text) <= 280:
+        raise ValueError(
+            f"poem must be 1-280 Unicode code points, got {len(text)}"
+        )
+    if not text.strip():
+        raise ValueError("poem must not be whitespace-only")
+    # Round-trip through UTF-8 to prove the text is valid UTF-8.
+    text.encode("utf-8").decode("utf-8")
+
+
 def main():
     outdir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
+    try:
+        validate_output(POEM)
+    except ValueError as exc:
+        print(f"error: invalid poem output: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    data = POEM.encode("utf-8")
     os.makedirs(outdir, exist_ok=True)
     path = os.path.join(outdir, "entry.txt")
-    data = POEM.encode("utf-8")
-    with open(path, "wb") as f:
-        f.write(data)
+    # Write atomically: temp file in the same directory, then replace,
+    # so a failed run never leaves a partial entry.txt behind.
+    fd, tmp_path = tempfile.mkstemp(dir=outdir, prefix=".entry.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     print(f"wrote {path} ({len(POEM)} characters, {len(data)} bytes)")
 
 
